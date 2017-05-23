@@ -1,0 +1,6 @@
+[package]
+name = "smith_waterman"
+version = "0.1.0"
+authors = ["sreenath.krishnan"]
+
+[dependencies]
