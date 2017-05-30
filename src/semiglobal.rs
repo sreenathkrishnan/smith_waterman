@@ -6,10 +6,12 @@ use std::cmp::max;
 const NEGATIVE_INF : i32 = i32::MIN / 2; // Dividing by 2 to stay away from the overflow region
 
 // ************* Scoring scheme ************** //
-const GAP_INITIATION_SCORE : i32 = -5;
-const GAP_UNIT_SCORE       : i32 = -1;
-const MATCH_SCORE          : i32 = 1;
-const MISMATCH_SCORE       : i32 = -1;
+pub struct Scoring {
+    pub gap_inititation_score : i32,
+    pub gap_unit_score       : i32,
+    pub match_score          : i32,
+    pub mismatch_score       : i32,
+}
 
 // ************* Allowed Moves ************** //
 #[derive(Debug, PartialEq, PartialOrd, Eq, Ord, Copy, Clone)]
@@ -26,7 +28,7 @@ enum Moves {
 // is a semi-global alignment. 
 //
 // An affine gap score model is used so that the gap score for a length 'k' is:
-// GapScore(k) = GAP_INITIATION_SCORE + GAP_UNIT_SCORE * k 
+// GapScore(k) = gap_inititation_score + gap_unit_score * k 
 //
 // score_matrix (i,j) is the best semiglobal alignment for prefixes s[0..i], t[0..j] 
 //
@@ -80,7 +82,7 @@ impl SemiglobalAlign {
         }
     }
     #[allow(non_snake_case)]
-    pub fn compute( s: &[u8], t: &[u8] ) -> SemiglobalAlign {
+    pub fn compute( s: &[u8], t: &[u8], scoring: &Scoring ) -> SemiglobalAlign {
 
         let m = s.len() + 1; // 1 for blank prefix
         let n = t.len() + 1;
@@ -103,7 +105,7 @@ impl SemiglobalAlign {
 
             for i in 1..m {
                 M[i][0] = NEGATIVE_INF;
-                I[i][0] = GAP_INITIATION_SCORE + GAP_UNIT_SCORE * (i as i32);
+                I[i][0] = scoring.gap_inititation_score + scoring.gap_unit_score * (i as i32);
                 D[i][0] = NEGATIVE_INF;
                 S[i][0] = I[i][0];
                 P[i][0] = Moves::INSERT;
@@ -111,7 +113,7 @@ impl SemiglobalAlign {
             for j in 1..n {
                 M[0][j] = NEGATIVE_INF;
                 I[0][j] = NEGATIVE_INF;
-                D[0][j] = GAP_INITIATION_SCORE + GAP_UNIT_SCORE * (j as i32);
+                D[0][j] = scoring.gap_inititation_score + scoring.gap_unit_score * (j as i32);
                 S[0][j] = D[0][j];
                 P[0][j] = Moves::DELETE;
             }
@@ -121,20 +123,20 @@ impl SemiglobalAlign {
                 let x = s[i-1];
                 for j in 1..n {
                     let y = t[j-1];
-                    let insert_opt = ( max ( I[i-1][j],                       // Already in the insert mode - no initiation
-                                             S[i-1][j] + GAP_INITIATION_SCORE // Or in some other mode
-                                             ) + GAP_UNIT_SCORE,              // Unit score need to be added irrespective
+                    let insert_opt = ( max ( I[i-1][j],                               // Already in the insert mode - no initiation
+                                             S[i-1][j] + scoring.gap_inititation_score // Or in some other mode
+                                             ) + scoring.gap_unit_score,              // Unit score need to be added irrespective
                                        Moves::INSERT);
 
-                    let delete_opt = ( max ( D[i][j-1],                       // Already in the delete mode - no initiation
-                                             S[i][j-1] + GAP_INITIATION_SCORE // Or in some other mode
-                                             ) + GAP_UNIT_SCORE,              // Unit score need to be added irrespective
+                    let delete_opt = ( max ( D[i][j-1],                               // Already in the delete mode - no initiation
+                                             S[i][j-1] + scoring.gap_inititation_score // Or in some other mode
+                                             ) + scoring.gap_unit_score,              // Unit score need to be added irrespective
                                        Moves::DELETE);
 
                     let match_opt = if x==y { 
-                                        (S[i-1][j-1] + MATCH_SCORE, Moves::MATCH) 
+                                        (S[i-1][j-1] + scoring.match_score, Moves::MATCH) 
                                     } else { 
-                                        (S[i-1][j-1] + MISMATCH_SCORE, Moves::SUBS)
+                                        (S[i-1][j-1] + scoring.mismatch_score, Moves::SUBS)
                                     };
                     let best_opt = max( max( insert_opt, delete_opt ), match_opt ); // There is implicit tie-breaking in this logic
 
@@ -243,7 +245,13 @@ mod tests {
     fn simple_test_semiglobal() {
         let s = b"ACCGTGGATGGG";
         let t = b"GAAAACCGTTGAT";
-        let mut align = SemiglobalAlign::compute(s, t);
+        let scoring = Scoring {
+            gap_inititation_score : -5,
+            gap_unit_score : -1,
+            match_score : 1,
+            mismatch_score : -1
+        };
+        let mut align = SemiglobalAlign::compute(s, t, &scoring);
         assert_eq!(align.moves, [DELETE, DELETE, DELETE, DELETE, MATCH, MATCH, MATCH, MATCH, MATCH, SUBS, MATCH, MATCH, MATCH] );
     }
 }
