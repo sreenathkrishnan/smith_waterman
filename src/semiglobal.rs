@@ -23,6 +23,7 @@ pub enum Moves {
     INSERT,
     DELETE,
     PREFIX_CLIP,
+    SUFFIX_CLIP,
     NONE
 }
 
@@ -58,45 +59,50 @@ pub struct Cell {
 // called the delete_matrix
 //
 // A soft clipping mode is also implemented wherein you pay a fixed penalty
-// to skip a portion at the beginning or end of the read "t". Currently only
-// prefix clipping is implemented.
+// to skip a portion at the beginning or end of the read "t". At any point
+// in the DP matrix, you can start from the PREFIX_CLIP mode and at any point
+// different from the PREFIX_CLIP move you can jump to j=n entry in the
+// matrix by a SUFFIX_CLIP move
 
 pub struct SemiglobalAlign {
-    // DP Matrices, could be made more memory efficient by just tracking previous row only
+    // DP Matrices, could be made more memory efficient
     pub score_matrix  : Vec<Vec<Cell> >,
     pub match_matrix  : Vec<Vec<Cell> >,
     pub insert_matrix : Vec<Vec<Cell> >,
     pub delete_matrix : Vec<Vec<Cell> >,
 
-    // This matrix need to consructed completely to allow for traceback unless we plan to
-    // use a fancier algorithm like Hirshberg's
-    pub moves_matrix  : Vec<Vec<Moves> >,
+    // For suffix clipping, we need to keep track of best
+    // clipping length for each position in reference s
+    pub clip_lengths : Vec<usize>,
 
     // Alignment Outputs
-    score   : i32,
-    s_range : [i32; 2],
-    t_range : [i32; 2],
+    pub score   : i32,
+    pub s_range : [i32; 2],
+    pub t_range : [i32; 2],
     pub moves   : Vec<Moves>,
     
     // Clipping specific outputs
-    prefix_clip_length : usize
+    pub prefix_clip_length : usize,
+    pub suffix_clip_length : usize
 }
 
 impl SemiglobalAlign {
     fn new(m : usize, n : usize) -> SemiglobalAlign { // m and n are the text lengths + 1
         SemiglobalAlign {
-            score_matrix  : vec![vec![Cell{score: 0, mov: Moves::NONE}; n]; m],
-            match_matrix  : vec![vec![Cell{score: 0, mov: Moves::NONE}; n]; m],
-            insert_matrix : vec![vec![Cell{score: 0, mov: Moves::NONE}; n]; m],
-            delete_matrix : vec![vec![Cell{score: 0, mov: Moves::NONE}; n]; m],
-            moves_matrix  : vec![vec![Moves::NONE; n]; m],
+            score_matrix  : vec![vec![Cell{score: NEGATIVE_INF, mov: Moves::NONE}; n]; m],
+            match_matrix  : vec![vec![Cell{score: NEGATIVE_INF, mov: Moves::NONE}; n]; m],
+            insert_matrix : vec![vec![Cell{score: NEGATIVE_INF, mov: Moves::NONE}; n]; m],
+            delete_matrix : vec![vec![Cell{score: NEGATIVE_INF, mov: Moves::NONE}; n]; m],
+
+            clip_lengths : vec![0 as usize; m],
 
             score   : NEGATIVE_INF,
             s_range : [-1, -1], // 2nd index is exclusive
             t_range : [-1, -1], // 2nd index is exclusive
             moves   : Vec::new(),
 
-            prefix_clip_length : 0
+            prefix_clip_length : 0,
+            suffix_clip_length : 0
         }
     }
     #[allow(non_snake_case)]
@@ -112,6 +118,7 @@ impl SemiglobalAlign {
             let mut M = &mut align.match_matrix;
             let mut I = &mut align.insert_matrix;
             let mut D = &mut align.delete_matrix;
+            let mut c = &mut align.clip_lengths;
 
             // Inititalize the matrices
             M[0][0].score = 0; 
@@ -165,8 +172,23 @@ impl SemiglobalAlign {
                         Cell { score: S[i-1][j-1].score + scoring.mismatch_score, mov:S[i-1][j-1].mov }
                     };
 
-                    S[i][j] = max ( max ( Cell { score: I[i][j].score, mov: Moves::INSERT }, Cell { score: D[i][j].score, mov: Moves::DELETE }),
-                        max ( Cell { score: M[i][j].score, mov: if x==y { Moves::MATCH } else { Moves::SUBS } }, Cell { score: scoring.soft_clipping_score, mov: Moves::PREFIX_CLIP } ) );
+                    if j==(n-1) {
+                        let temp_max = max ( max ( Cell { score: I[i][j].score, mov: Moves::INSERT }, Cell { score: D[i][j].score, mov: Moves::DELETE }),
+                            max ( Cell { score: M[i][j].score, mov: if x==y { Moves::MATCH } else { Moves::SUBS } }, Cell { score: scoring.soft_clipping_score, mov: Moves::PREFIX_CLIP } ) );
+                        if temp_max.score > S[i][n-1].score {
+                            c[i] = 0;
+                            S[i][n-1] = temp_max;
+                        }
+                    } else {
+                        S[i][j] = max ( max ( Cell { score: I[i][j].score, mov: Moves::INSERT }, Cell { score: D[i][j].score, mov: Moves::DELETE }),
+                            max ( Cell { score: M[i][j].score, mov: if x==y { Moves::MATCH } else { Moves::SUBS } }, Cell { score: scoring.soft_clipping_score, mov: Moves::PREFIX_CLIP } ) );
+
+                        // Track the score if we do a SUFFIX_CLIP after this character
+                        if (S[i][j].score + scoring.soft_clipping_score) > S[i][n-1].score {
+                            c[i] = n - 1 - j;
+                            S[i][n-1] = Cell { score: S[i][j].score + scoring.soft_clipping_score, mov: Moves::SUFFIX_CLIP };
+                        }
+                    }
 
                 }
             }
@@ -182,6 +204,8 @@ impl SemiglobalAlign {
                     align.s_range[1] = i as i32;
                 }
             }
+
+            align.suffix_clip_length = c[align.s_range[1] as usize];
 
             let mut i : usize = align.s_range[1] as usize;
             let mut j : usize = (n-1) as usize;
@@ -199,6 +223,7 @@ impl SemiglobalAlign {
                     Moves::INSERT => { next = I[i][j].mov; i-=1; },
                     Moves::DELETE => { next = D[i][j].mov; j-=1; },
                     Moves::PREFIX_CLIP => { align.prefix_clip_length = j; break;},
+                    Moves::SUFFIX_CLIP => { j-=align.suffix_clip_length; next = S[i][j].mov;}
                     Moves::NONE => break
                 };
 
@@ -221,6 +246,7 @@ impl SemiglobalAlign {
                     Moves::INSERT => align.s_range[0]-=1,
                     Moves::DELETE => {},
                     Moves::PREFIX_CLIP => {},
+                    Moves::SUFFIX_CLIP => {},
                     Moves::NONE => panic!("P cannot be NONE. There is a terrible mistake.")
                 }
             }
@@ -238,6 +264,7 @@ impl SemiglobalAlign {
         println!(" t_range = [{},{})", self.t_range[0], self.t_range[1]);
         println!(" Moves : {:?}", self.moves);
         println!(" Prefix clip length : {}", self.prefix_clip_length);
+        println!(" Suffix clip length : {}", self.suffix_clip_length);
 
         let mut line1 = Vec::new();
         let mut line2 = Vec::new();
@@ -279,6 +306,13 @@ impl SemiglobalAlign {
                     }
                     j = self.prefix_clip_length;
                 }
+                Moves::SUFFIX_CLIP => {
+                    for k in j..t.len() {
+                        line1.push(' ');
+                        line2.push('c');
+                        line3.push(t[k] as char);
+                    }
+                }
                 Moves::NONE => panic!("Moves should not be NONE. This is a terrible mistake! :/")
             }
         }
@@ -316,7 +350,7 @@ mod tests {
             soft_clipping_score : -100
         };
         let align = SemiglobalAlign::compute(s, t, &scoring);
-        assert_eq!(align.moves, [DELETE, DELETE, DELETE, DELETE, MATCH, MATCH, MATCH, MATCH, MATCH, SUBS, MATCH, MATCH, MATCH] );
+        assert_eq!(align.moves, vec![DELETE, DELETE, DELETE, DELETE, MATCH, MATCH, MATCH, MATCH, MATCH, SUBS, MATCH, MATCH, MATCH] );
     }
 
     #[test]
@@ -331,7 +365,7 @@ mod tests {
             soft_clipping_score : -100
         };
         let align = SemiglobalAlign::compute(s, t, &scoring);
-        assert_eq!(align.moves, [DELETE, DELETE, DELETE, DELETE] );
+        assert_eq!(align.moves, vec![DELETE, DELETE, DELETE, DELETE] );
     }
 
     #[test]
@@ -346,7 +380,7 @@ mod tests {
             soft_clipping_score : -100
         };
         let align = SemiglobalAlign::compute(s, t, &scoring);
-        assert_eq!(align.moves, [MATCH, MATCH, INSERT, INSERT, MATCH, MATCH, MATCH] );
+        assert_eq!(align.moves, vec![MATCH, MATCH, INSERT, INSERT, MATCH, MATCH, MATCH] );
     }
 
     #[test]
@@ -361,6 +395,36 @@ mod tests {
             soft_clipping_score : -5
         };
         let align = SemiglobalAlign::compute(s, t, &scoring);
-        assert_eq!(align.moves, [PREFIX_CLIP, MATCH, MATCH, SUBS]);
+        assert_eq!(align.moves, vec![PREFIX_CLIP, MATCH, MATCH, SUBS]);
+    }
+
+    #[test]
+    fn suffix_clip_test() {
+        let s = b"CGTTTT";
+        let t = b"GAAAA";
+        let scoring = Scoring {
+            gap_inititation_score : -5,
+            gap_unit_score : -1,
+            match_score : 2,
+            mismatch_score : -2,
+            soft_clipping_score : -5
+        };
+        let align = SemiglobalAlign::compute(s, t, &scoring);
+        assert_eq!(align.moves, vec![MATCH, SUFFIX_CLIP]);
+    }
+
+    #[test]
+    fn test_longer_string_all_operations() {
+        let s = b"GGGGGGATTTCCCCCCCCCTTTTTTTTTTAAAAAAAAA";
+        let t = b"TTTTTGGGGGGATGGCCCCCCTTTTTTTTTTGGGAAAAAAAAAGGGGGG";
+        let scoring = Scoring {
+            gap_inititation_score : -5,
+            gap_unit_score : -1,
+            match_score : 2,
+            mismatch_score : -2,
+            soft_clipping_score : -5
+        };
+        let align = SemiglobalAlign::compute(s, t, &scoring);
+        assert_eq!(align.moves, vec![PREFIX_CLIP, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, SUBS, SUBS, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, INSERT, INSERT, INSERT, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, DELETE, DELETE, DELETE, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, MATCH, SUFFIX_CLIP]);
     }
 }

@@ -6,7 +6,7 @@ use smith_waterman::semiglobal::*;
 
 fn main() {
     let s = b"GGGGGGATTTCCCCCCCCCTTTTTTTTTTAAAAAAAAA";
-    let t = b"TTTTTGGGGGGATGGCCCCCCTTTTTTTTTTGGGAAAAAAAAA";
+    let t = b"TTTTTGGGGGGATGGCCCCCCTTTTTTTTTTGGGAAAAAAAAAGGGGGG";
     let scoring = Scoring {
         gap_inititation_score : -5,
         gap_unit_score : -1,
